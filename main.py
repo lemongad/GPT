@@ -1,197 +1,238 @@
-import hashlib
 import json
+import random
+import re
+import string
 import time
-
-import requests
+import asyncio
+import tiktoken
 import uvicorn
-from fastapi import FastAPI, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Request, HTTPException, Header, Depends
 from starlette.responses import StreamingResponse
-from collections import OrderedDict
-
-
-# async def on_fetch(request, env):
-#     import asgi
-#
-#     return await asgi.fetch(app, request, env)
-
-def md5(msg: str):
-    if isinstance(msg, str):
-        hash_obj = hashlib.md5()
-        hash_obj.update(msg.encode())
-        return hash_obj.hexdigest()
-
-
-class LRUCache:
-    def __init__(self, capacity, key_hash_func=md5):
-        self.cache = OrderedDict()
-        self.capacity = capacity
-        self.key_hash_func = key_hash_func
-
-    def __getitem__(self, key):
-        if self.key_hash_func:
-            key = self.key_hash_func(key)
-        if key not in self.cache:
-            return None
-        else:
-            # 将元素移到字典末尾表示最近访问
-            self.cache.move_to_end(key)
-            return self.cache[key]
-
-    def get(self, key, default=None):
-        value = self[key]
-        return value if value is not None else default
-
-    def __setitem__(self, key, value):
-        if self.key_hash_func:
-            key = self.key_hash_func(key)
-        if key in self.cache:
-            # 更新键值，并将元素移到字典末尾
-            self.cache.move_to_end(key)
-        self.cache[key] = value
-        if len(self.cache) > self.capacity:
-            # 弹出字典开头的元素，即最久未访问的元素
-            self.cache.popitem(last=False)
-
+import httpx
+import logging
+import os
 
 app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+authorization = os.getenv("AUTHORIZATION")
+gtoken = os.getenv("GTOKEN")
+def num_tokens_from_string(string: str, encoding_name: str) -> int:
+    encoding = tiktoken.get_encoding(encoding_name)
+    num_tokens = len(encoding.encode(string))
+    return num_tokens
 
 
-@app.options('/v1/chat/completions')
-async def pre_chat():
-    return Response()
+def count_token_messages(messages):
+    # 给定一个消息列表，计算其总token数量
+    count = 0
+    for message in messages:
+        content = message['content']
+        count += content
+    return count
+
+
+# 创建 KeyManager 实例
+logging.basicConfig(level=logging.INFO)
+
+
+async def verify_key(authorization: str = Header(...)):
+    try:
+        prefix, token = authorization.split()
+        if prefix.lower() != "bearer" or token != "123":
+            raise HTTPException(status_code=400, detail="6")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="6")
+
+
+async def process_request(original_data):
+    messages = original_data.get('messages', [])
+    formatted_string = ','.join(f"{message['role']}:{message['content']}" for message in messages)
+    new_data = {
+        "isGetJson": True,
+        "version": "1.3.6",
+        "language": "zh-CN",
+        "channelId": "96f7f0e7-feb4-451c-8f53-bb068d65f2c8",
+        "message": "This dialogue record is crucial for your understanding and execution of tasks. In our interactions, you are the 'assistant', and I am the 'user'. The format is as follows: when 'user:' appears, it signifies my questions or statements; correspondingly, you do not need to start your replies with 'assistant:', just respond directly. This format will facilitate a more efficient dialogue between us." + formatted_string,
+        "model":  "GPT-4",
+        "messageIds": [],
+        "improveId": None,
+        "richMessageId": None,
+        "isNewChat": None,
+        "action": None,
+        "isGeneratePpt": None,
+        "isSlidesChat": False,
+        "imageUrls": [],
+        "roleEnum": None,
+        "pptCoordinates": "",
+        "translateLanguage": None,
+        "docPromptTemplateId": None
+    }
+    return new_data
 
 
 @app.post('/v1/chat/completions')
-async def chat(request: Request):
-    # 解析接收到的请求体为POST请求
-    request_json = await request.json()
-    messages = request_json['messages']
-    chat_id = None
-    if len(messages) > 2:
-        # 上下文
-        for msg in messages:
-            if msg['role'] == 'user':
-                chat_id = find_chat_by_question.get(msg['content'])
-                break
-
-    text = request_json['messages'][-1]['content']
-    model = request_json['model']
-
-    def next_chat_web(msg):
-        return 'data: ' + json.dumps({
-            'id': f'chatcmpl-{time.time()}',
-            'created': time.time(),
-            'object': "chat.completion.chunk",
-            'model': model,
-            'choices': [{
-                'delta': {'content': msg},
-                'index': 0,
-                'finish_reason': None if msg else 'stop'
-            }]
-        }, ensure_ascii=False) + '\n\n'
-
-    def next_chat_web_summary(msg):
-        return {
-            'id': f'chatcmpl-{time.time()}',
-            'created': time.time(),
-            'object': "chat.completion.chunk",
-            'model': model,
-            'choices': [{
-                'message': {'content': msg},
-                'index': 0
-            }]
-        }
-
-    if request_json.get('stream'):
-        # 返回流式响应
-        def generate():
-            print('-' * 30, '\n')
-            print('question: \n', text)
-            print('-' * 30, '\n')
-            print('answer: ')
-            for word in answer_stream(model, chat_id, text):
-                print(word, end='')
-                yield next_chat_web(word)
-            print()
-            yield 'data: [DONE]\n\n'
-
-        return StreamingResponse(generate(), media_type="text/event-stream")
-    else:
-        # 生成摘要
-        print('-' * 30, '\n')
-        print('question: \n', text)
-        print('-' * 30, '\n')
-        print('summary: ', end='')
-        summary = ''
-        for word in answer_stream(model, chat_id, text, True):
-            print(word, end='')
-            summary = summary + word
-        print()
-        return next_chat_web_summary(summary)
-
-
-def answer_stream(model, chat_id, question='鲁迅为什么暴打周树人？', summary=False):
-    if model not in model_infos:
-        model = default_model
-    url: str = model_infos[model]
-    endpoint = url[url.rfind('/') + 1:]
-    req_json = {
-        "conversationId": chat_id,
-        'parentMessageId': find_last_msg_in_chat.get(chat_id, '00000000-0000-0000-0000-000000000000'),
-        "text": question,
-        "endpoint": endpoint,
-        "model": model
-    }
+async def forward_request(request: Request):
+    global authorization,gtoken
+    request_data = await request.json()
+    n = request_data.get('n', 1)
+    messages = request_data.get('messages', [])
+    total = ""
+    for message in messages:
+        total += message['content']
+    prompt_tokens = num_tokens_from_string(total, "cl100k_base")
+    models = request_data.get("model", "默认模型")
+    request_data = await request.json()
+    target_url = 'https://api.popai.pro/api/v1/chat/send'
     headers = {
-        'origin': 'https://chatpro.ai-pro.org',
-        'referer': 'https://chatpro.ai-pro.org/chat/new'
-    }
-    resp = requests.post(url, json=req_json, headers=headers, stream=True)
-    resp.encoding = 'utf-8'
-    last_text = ''
-    lines = resp.iter_lines(decode_unicode=True)
-    for data in lines:
-        # 首条消息包含对话信息
-        if data.startswith('data'):
-            infos = json.loads(data[6:])
-            chat_id = infos['message']['conversationId']
-            find_chat_by_question[question] = chat_id
-            if not summary:
-                msg_id = infos['message']['messageId']
-                find_last_msg_in_chat[chat_id] = msg_id
-            break
-    for data in lines:
-        if data.startswith('data'):
-            infos = json.loads(data[6:])
-            if 'text' in infos:
-                text = infos['text']
-                yield text[len(last_text):]
-                last_text = text
+        "accept": "text/event-stream",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,zh-TW;q=0.7,zh-HK;q=0.6",
+        "app-name": "popai-web",
+        "authorization": authorization,
+        "content-type": "application/json",
+        "device-info": "{web_id:k-s8Xp4S9LEmrHghBhT2m,baidu_id:18f1ff567e243687188711}",
+        "gtoken": gtoken,
+        "language": "en",
+        "origin": "https://www.popai.pro",
+        "priority": "u=1, i",
+        "referer": "https://www.popai.pro/",
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": "Windows",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",}
+
+    should_stream = request_data.get("stream", False)
+    messages = request_data.get('messages', [])
+    formatted_string = ','.join(f"{message['role']}:{message['content']}" for message in messages)
+    request_data = await process_request(request_data)
+    if should_stream:
+        response_data = handle_streaming_and_sending(request_data, formatted_string, models, headers, target_url)
+        return StreamingResponse(response_data, media_type="application/json")
+    else:
+        response_data = await generate_non_streaming_response(request_data, models, headers,  prompt_tokens, n)
+        return response_data
 
 
-if __name__ == '__main__':
-    find_chat_by_question = LRUCache(1000)
-    find_last_msg_in_chat = LRUCache(1000)
-    model_infos = {
-        'gpt-3.5-turbo': 'https://chatpro.ai-pro.org/api/ask/openAI',
-        'gpt-4-1106-preview': 'https://chatpro.ai-pro.org/api/ask/openAI',
-        'gpt-4-pro-max': 'https://chatpro.ai-pro.org/api/ask/openAI',
+def get_random_string(length):
+    letters = string.ascii_letters + string.digits
+    result_str = ''.join(random.choice(letters) for _ in range(length))
+    return result_str
 
-        'chat-bison': 'https://chatpro.ai-pro.org/api/ask/google',
-        'text-bison': 'https://chatpro.ai-pro.org/api/ask/google',
-        'codechat-bison': 'https://chatpro.ai-pro.org/api/ask/google',
 
-        'openchat_3.5': 'https://chatpro.ai-pro.org/api/ask/Opensource',
-        'zephyr-7B-beta': 'https://chatpro.ai-pro.org/api/ask/Opensource',
-    }
-    default_model = 'gpt-4-pro-max'
-    uvicorn.run(app, host='0.0.0.0', port=5000)
+async def generate_response(request_data, formatted_string, models, headers, target_url):
+    retry_count = 0
+    max_retries = 3
+    delay = 0.035
+    i = 0
+    j = 1
+    same_id = f'chatcmpl-{get_random_string(29)}'
+    while retry_count < max_retries and not i == 1:
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10, read=250), follow_redirects=True) as client:
+                async with client.stream("POST", target_url, json=request_data, headers=headers) as res:
+                    if res.status_code == 200:
+                        async for line in res.aiter_lines():
+                            try:
+                                data = json.loads(line.lstrip("data:"))
+                                if data:
+                                    choices = data[0].get("content")
+                                    if j :
+                                        j=0
+                                        continue
+                                    result = {
+                                        "id": same_id,
+                                        "object": "chat.completion.chunk",
+                                        "created": int(time.time()),
+                                        "model": models,
+                                        "system_fingerprint": "fp_a24b4d720c",
+                                        "choices": [
+                                            {"index": 0, "delta": {"content": choices}, "finish_reason": "null"}
+                                        ],
+                                    }
+                                    json_result = json.dumps(result, ensure_ascii=False)
+                                    yield f"data: {json_result}\n\n"
+                                    await asyncio.sleep(delay)
+                            except json.JSONDecodeError:
+                                pass
+                        yield f"data: {json.dumps({'id': same_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': models, 'system_fingerprint': 'fp_a24b4d720c', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n".encode(
+                            'utf-8')
+                        yield "data: [DONE]\n".encode('utf-8')
+                        i=1
+
+                    else:
+
+                        logging.warning(f"Received non-200 status code {res.status_code}, retrying...")
+                        retry_count += 1
+
+        except (httpx.ReadTimeout, httpx.ConnectError) as e:
+            error_message = f"Error during request: {e}"
+
+            retry_count += 1
+
+    return
+
+
+async def generate_non_streaming_response(request_data, models, headers, prompt_tokens, n):
+    target_url = 'https://api.popai.pro/api/v1/chat/send'
+    """非流式生成响应"""
+    same_id = f'chatcmpl-{get_random_string(29)}'
+    choices = []
+    delay = 1
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            semaphore = asyncio.Semaphore(5)
+            async with semaphore:
+                responses = await asyncio.gather(*[
+                    client.post(url=target_url, json=request_data, headers=headers)
+                    for _ in range(n)
+                ])
+
+            for i, response in enumerate(responses):
+                data = ""
+                response.raise_for_status()
+                content_pattern = r'"content":"(.*?)"'
+                content_matches = re.findall(content_pattern, response.text)
+
+                if len(content_matches) > 1:
+                    data = "".join(content_matches[1:])
+                choice = {
+                    "index": i,
+                    "message": {
+                        "role": "assistant",
+                        "content": data
+                    },
+                    "finish_reason": "stop"
+                }
+                choices.append(choice)
+                await asyncio.sleep(delay)
+
+        prompt_tokens = prompt_tokens
+        completion_tokens = sum(
+            num_tokens_from_string(choice["message"]["content"], "cl100k_base") for choice in choices)
+        total_tokens = prompt_tokens + completion_tokens
+
+        response_data = {
+            "id": same_id,
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": models,
+            "choices": choices,
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens
+            },
+        }
+        return response_data
+
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=500, detail="Internal Server Error") from exc
+
+
+async def handle_streaming_and_sending(request_data, formatted_string, models, headers, target_url):
+    data = ""
+    async for item in generate_response(request_data, formatted_string, models, headers, target_url):
+        yield item  # 将每个项作为流的一部分
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=1106)
