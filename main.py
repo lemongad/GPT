@@ -28,6 +28,13 @@ def count_token_messages(messages):
         count += content
     return count
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # 创建 KeyManager 实例
 logging.basicConfig(level=logging.INFO)
