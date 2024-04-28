@@ -49,7 +49,7 @@ async def process_request(original_data):
         "isGetJson": True,
         "version": "1.3.6",
         "language": "zh-CN",
-        "channelId": "96f7f0e7-feb4-451c-8f53-bb068d65f2c8",
+        "channelId": "7a77e2d4-a5c5-481a-ad9c-3c3edcb985ad",
         "message": "This dialogue record is crucial for your understanding and execution of tasks. In our interactions, you are the 'assistant', and I am the 'user'. The format is as follows: when 'user:' appears, it signifies my questions or statements; correspondingly, you do not need to start your replies with 'assistant:', just respond directly. This format will facilitate a more efficient dialogue between us." + formatted_string,
         "model":  "GPT-4",
         "messageIds": [],
